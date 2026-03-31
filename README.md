@@ -1,139 +1,65 @@
  (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
 diff --git a/README.md b/README.md
-index 152fc3bb5a6b11f7b1a2a99a4614a250aa11ec83..c4980845e3dc6b9eec3f36ad7b111884c8c93ea3 100644
+index 382cc1e7e430e2002884b4edf5155c2869881f11..724953a2e694bbd373b63a7597722a48365943b7 100644
 --- a/README.md
 +++ b/README.md
-@@ -1,2 +1,128 @@
--# Hhhhhh
--VPS Windows RDP (Tailscale) - CodeCloud
-+# Windows RDP VPS bằng GitHub Actions + Tailscale
+@@ -1,2 +1,54 @@
+-# my-vps-duonf
+-VPS Windows RDP (Ngrok) - CodeCloud
++# Minecraft Server trên GitHub (qua Codespaces)
 +
-+Repository này cung cấp workflow để khởi tạo **máy Windows tạm thời** trên GitHub Actions, bật **Remote Desktop (RDP)** và kết nối qua **Tailscale**.
++> ⚠️ **Lưu ý quan trọng:** GitHub **không phải** nền tảng hosting server game 24/7. Bộ cấu hình này giúp bạn chạy server Minecraft **tạm thời** bằng GitHub Codespaces để test/chơi ngắn hạn.
 +
-+> Mục đích: môi trường test nhanh, demo, chạy tác vụ ngắn hạn. Không phù hợp cho production lâu dài.
++## Bạn sẽ có gì
++- Script tự tải và chạy **PaperMC**.
++- Cấu hình sẵn để chạy trong GitHub Codespaces.
++- Tự mở cổng mặc định `25565`.
 +
-+---
++## 1) Tạo repo trên GitHub
++1. Push toàn bộ project này lên GitHub.
++2. Mở repo trên web GitHub.
 +
-+## 1) Tính năng chính
++## 2) Chạy bằng Codespaces
++1. Bấm **Code** → **Codespaces** → **Create codespace on main**.
++2. Chờ máy ảo khởi động xong.
++3. Trong terminal của Codespace, chạy:
 +
-+- Tạo máy `windows-latest` khi bấm **Run workflow**.
-+- Tự động:
-+  - Tạo/cập nhật tài khoản local admin cho RDP.
-+  - Bật RDP + Firewall rule.
-+  - Cài Tailscale và join mạng bằng `TAILSCALE_AUTHKEY`.
-+- Upload artifact `result` chứa endpoint RDP dạng:
-+  - `TAILSCALE_IP:3389|RDP_USERNAME`
-+- Cho phép tùy chỉnh thời gian chạy (30–360 phút).
-+
-+---
-+
-+## 2) Chuẩn bị trước khi dùng
-+
-+### 2.1 Fork hoặc clone repo lên GitHub
-+
-+Bạn cần có repo chứa file workflow:
-+
-+- `.github/workflows/run.yml`
-+
-+### 2.2 Tạo 2 secrets bắt buộc
-+
-+Vào **GitHub repo → Settings → Secrets and variables → Actions → New repository secret**:
-+
-+1. `RDP_PASSWORD`
-+   - Mật khẩu đăng nhập Remote Desktop.
-+   - Nên dùng mật khẩu mạnh (12+ ký tự, gồm chữ hoa/thường, số, ký tự đặc biệt).
-+
-+2. `TAILSCALE_AUTHKEY`
-+   - Tạo trong Tailscale Admin Console.
-+   - Nên dùng key có expiry và scope tối thiểu cần thiết.
-+
-+---
-+
-+## 3) Cách chạy workflow
-+
-+1. Vào tab **Actions**.
-+2. Chọn workflow **Windows RDP VPS (GitHub Actions)**.
-+3. Nhấn **Run workflow**.
-+4. Nhập các input (tùy chọn):
-+   - `duration_minutes`: thời gian giữ máy chạy (mặc định 180, min 30, max 360).
-+   - `rdp_username`: tên user RDP (mặc định `runneradmin`).
-+5. Nhấn **Run workflow** để bắt đầu.
-+
-+---
-+
-+## 4) Lấy thông tin để Remote Desktop
-+
-+Sau khi job chạy qua bước upload artifact:
-+
-+1. Mở run vừa chạy.
-+2. Tải artifact **`result`**.
-+3. Mở file `info.txt` sẽ thấy dạng:
-+
-+```txt
-+100.x.y.z:3389|runneradmin
++```bash
++./scripts/start-server.sh
 +```
 +
-+- Host: `100.x.y.z`
-+- Port: `3389`
-+- Username: phía sau ký tự `|`
-+- Password: giá trị secret `RDP_PASSWORD` đã cấu hình
++4. Lần chạy đầu sẽ hỏi chấp nhận EULA. Script sẽ tự tạo `server/eula.txt` với `eula=true`.
++5. Khi server chạy xong, bạn sẽ thấy dòng kiểu:
 +
-+Sau đó dùng **Remote Desktop Connection (mstsc)** trên Windows để kết nối.
++```text
++Done (...)! For help, type "help"
++```
 +
-+---
++## 3) Kết nối vào server
++Vì Codespaces không public cổng game theo kiểu trực tiếp như VPS, bạn cần tunnel TCP. Gợi ý:
++- [playit.gg](https://playit.gg/)
++- [ngrok TCP](https://ngrok.com/docs/using-ngrok-with/minecraft/)
 +
-+## 5) Cấu trúc workflow
++Sau khi có địa chỉ tunnel (ví dụ `abc.playit.gg:12345`), dùng địa chỉ đó để vào game.
 +
-+File: `.github/workflows/run.yml`
++## Cấu hình nhanh
++Bạn có thể thay phiên bản Minecraft/Paper trong file `.env`:
 +
-+Các bước chính:
++```env
++MC_VERSION=1.20.6
++PAPER_BUILD=151
++MEMORY=2G
++```
 +
-+1. **Validate input/secrets**
-+   - Kiểm tra bắt buộc có `RDP_PASSWORD`, `TAILSCALE_AUTHKEY`.
-+   - Chuẩn hóa `duration_minutes` vào khoảng 30–360.
++## Lệnh hữu ích
++Trong terminal server:
++- `op <ten_nguoi_choi>`: cấp quyền admin.
++- `stop`: tắt server an toàn.
 +
-+2. **Setup local admin + enable RDP**
-+   - Tạo user local (hoặc reset password nếu đã tồn tại).
-+   - Add vào nhóm Administrators.
-+   - Bật RDP trong registry + firewall.
-+
-+3. **Install Tailscale**
-+   - Cài bản MSI chính thức từ `pkgs.tailscale.com`.
-+
-+4. **Connect Tailscale**
-+   - Chạy `tailscale up --authkey=...`.
-+   - Lấy IPv4 Tailnet.
-+
-+5. **Upload artifact result**
-+   - Ghi `info.txt` để bạn tải xuống và kết nối.
-+
-+6. **Keep alive**
-+   - Giữ máy online theo thời lượng đã chọn.
-+
-+---
-+
-+## 6) Lưu ý quan trọng
-+
-+- GitHub-hosted runner là tài nguyên tạm thời, không đảm bảo lưu dữ liệu lâu dài.
-+- Không commit mật khẩu vào source code.
-+- Chỉ chia sẻ thông tin truy cập cho người tin cậy.
-+- Nếu cần dùng ổn định lâu dài, nên chuyển sang VPS/cloud thực thụ.
-+
-+---
-+
-+## 7) Troubleshooting nhanh
-+
-+- **Lỗi thiếu secret**: kiểm tra lại đã tạo `RDP_PASSWORD` và `TAILSCALE_AUTHKEY` đúng tên chưa.
-+- **Không thấy IP Tailscale**: kiểm tra auth key còn hạn/đúng quyền.
-+- **RDP không vào được**: kiểm tra host/port/user/password và xem log workflow ở step `Setup local admin and enable RDP`.
-+
-+---
-+
-+## 8) Gợi ý mở rộng
-+
-+- Thêm bước cài phần mềm tự động (Chrome, VS Code, Python…).
-+- Tự động gửi endpoint lên Telegram/Slack (qua webhook secret).
-+- Bổ sung cleanup thủ công (logout Tailnet, xoá user tạm).
++## Giới hạn cần biết
++- Codespaces có thể sleep/stop khi không dùng.
++- Không phù hợp để host public dài hạn.
++- Muốn server ổn định 24/7 nên dùng VPS/cloud thực thụ (Oracle Cloud/AWS Lightsail/DigitalOcean).
  
 EOF
 )
