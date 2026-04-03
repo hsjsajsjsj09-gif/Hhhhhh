@@ -1,0 +1,310 @@
+ (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
+diff --git a/.github/workflows/run.yml b/.github/workflows/run.yml
+index 500a7d4bf143982b47fb5cdc65c97f1d9621c3b8..23068b91d3e71a066cc9d979c4f8212c675339fc 100644
+--- a/.github/workflows/run.yml
++++ b/.github/workflows/run.yml
+@@ -1,207 +1,137 @@
++name: Windows RDP VPS (GitHub Actions)
+ 
+-name: Windows RDP + Tailscale (6h)
+ on:
+   workflow_dispatch:
++    inputs:
++      duration_minutes:
++        description: "Thời gian giữ máy chạy (phút, tối đa 360)"
++        required: false
++        default: "180"
++      rdp_username:
++        description: "Tên user RDP"
++        required: false
++        default: "runneradmin"
++
+ jobs:
+   rdp:
+     runs-on: windows-latest
+     timeout-minutes: 395
++    env:
++      RDP_PASSWORD: ${{ secrets.RDP_PASSWORD }}
++      TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
++
+     steps:
+       - name: Checkout
+         uses: actions/checkout@v4
+ 
+-      - name: Setup Admin + Enable RDP
++      - name: Validate input and secrets
+         shell: pwsh
+         run: |
+-          $pass = "Vps@cJpkANXH@7"
+-          $sec  = ConvertTo-SecureString $pass -AsPlainText -Force
+-          if (!(Get-LocalUser -Name runneradmin -ErrorAction SilentlyContinue)) {
+-            New-LocalUser runneradmin -Password $sec -FullName "Admin"
++          $ErrorActionPreference = "Stop"
++
++          if (-not $env:RDP_PASSWORD) {
++            throw "Thiếu secret RDP_PASSWORD"
++          }
++
++          if (-not $env:TAILSCALE_AUTHKEY) {
++            throw "Thiếu secret TAILSCALE_AUTHKEY"
++          }
++
++          $duration = [int]"${{ github.event.inputs.duration_minutes || '180' }}"
++          if ($duration -lt 30) { $duration = 30 }
++          if ($duration -gt 360) { $duration = 360 }
++
++          $username = "${{ github.event.inputs.rdp_username || 'runneradmin' }}"
++          if ([string]::IsNullOrWhiteSpace($username)) {
++            $username = "runneradmin"
++          }
++
++          "DURATION_MINUTES=$duration" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
++          "RDP_USERNAME=$username" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
++
++          Write-Host "Input hợp lệ. Duration=$duration phút, Username=$username"
++
++      - name: Setup local admin and enable RDP
++        shell: pwsh
++        run: |
++          $ErrorActionPreference = "Stop"
++
++          $username = $env:RDP_USERNAME
++          $pass = $env:RDP_PASSWORD
++          $sec = ConvertTo-SecureString $pass -AsPlainText -Force
++
++          if (!(Get-LocalUser -Name $username -ErrorAction SilentlyContinue)) {
++            New-LocalUser -Name $username -Password $sec -FullName "GitHub RDP User"
+           } else {
+-            Set-LocalUser runneradmin -Password $sec
++            Set-LocalUser -Name $username -Password $sec
+           }
+-          Add-LocalGroupMember -Group "Administrators" -Member runneradmin -ErrorAction SilentlyContinue
+-          
++
++          Add-LocalGroupMember -Group "Administrators" -Member $username -ErrorAction SilentlyContinue
++
+           Set-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+-          Set-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
++          Set-ItemProperty 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1 -Force
+           Enable-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue
+-          Write-Host "RDP enabled OK"
++
++          Write-Host "Đã bật RDP cho user: $username"
+ 
+       - name: Install Tailscale
+         shell: pwsh
+         run: |
+-          iwr https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi -OutFile ts.msi -UseBasicParsing -TimeoutSec 60
++          $ErrorActionPreference = "Stop"
++          Invoke-WebRequest "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi" -OutFile "ts.msi"
+           Start-Process msiexec -ArgumentList '/i','ts.msi','/quiet','/norestart' -Wait
+-          Start-Sleep 15
+-          Write-Host "Tailscale installed OK"
++          Start-Sleep -Seconds 10
++          Write-Host "Đã cài Tailscale"
+ 
+-      - name: Connect Tailscale
+-        id: ts_connect
++      - name: Connect Tailscale with auth key
+         shell: pwsh
+         run: |
+-          $ErrorActionPreference = "Continue"
+-          $ts   = "$env:ProgramFiles/Tailscale/tailscale.exe"
+-          $name = "gh-rdp-$(Get-Random -Maximum 99999)"
+-          
+-          # Check if already connected
+-          try {
+-            $ip = & $ts ip -4 2>$null
+-            if ($ip -match '^100\.') {
+-              Write-Host "Already connected: $($ip.Trim())"
+-              "$($ip.Trim()):3389|Vps@cJpkANXH@7" | Out-File info.txt -Encoding utf8 -NoNewline
+-              "CONNECTED" | Out-File status.txt -Encoding utf8 -NoNewline
+-              exit 0
+-            }
+-          } catch {
+-            Write-Host "Not connected yet, will start Tailscale"
+-          }
+-          
+-          # Start tailscale up in background
+-          Write-Host "Starting Tailscale with hostname: $name"
+-          Start-Process -FilePath $ts -ArgumentList "up","--hostname=$name","--accept-routes","--accept-dns=false" -WindowStyle Hidden
+-          
+-          # Wait and check for auth URL or connection (2 minutes max)
+-          $authUrl = ""
+-          $connected = $false
+-          
+-          for ($i = 0; $i -lt 60; $i++) {
+-            Start-Sleep 2
+-            
+-            # Check if connected
+-            try {
+-              $ip = & $ts ip -4 2>$null
+-              if ($ip -match '^100\.') {
+-                Write-Host "Connected! IP: $($ip.Trim())"
+-                "$($ip.Trim()):3389|Vps@cJpkANXH@7" | Out-File info.txt -Encoding utf8 -NoNewline
+-                "CONNECTED" | Out-File status.txt -Encoding utf8 -NoNewline
+-                $connected = $true
+-                break
+-              }
+-            } catch {}
+-            
+-            # Check for auth URL
+-            try {
+-              $status = & $ts status 2>&1 | Out-String
+-              if ($status -match 'https://login\.tailscale\.com/a/[a-zA-Z0-9]+') {
+-                $authUrl = $Matches[0]
+-                Write-Host "======================================"
+-                Write-Host "AUTH URL FOUND: $authUrl"
+-                Write-Host "======================================"
+-                "WAITING_AUTH|$authUrl" | Out-File info.txt -Encoding utf8 -NoNewline
+-                $authUrl | Out-File authurl.txt -Encoding utf8 -NoNewline
+-                "WAITING_AUTH" | Out-File status.txt -Encoding utf8 -NoNewline
+-                break
+-              }
+-            } catch {}
+-          }
+-          
+-          # If not connected and no auth URL found, write pending
+-          if (-not $connected -and -not $authUrl) {
+-            Write-Host "No auth URL found yet, writing PENDING"
+-            "PENDING|Tailscale dang khoi dong..." | Out-File info.txt -Encoding utf8 -NoNewline
+-            "PENDING" | Out-File status.txt -Encoding utf8 -NoNewline
+-          }
+-          
+-          Write-Host "Step Connect done, info.txt ready for upload"
+-          # QUAN TRONG: Luon exit 0 de cac step sau duoc chay
+-          exit 0
++          $ErrorActionPreference = "Stop"
++          $ts = "$env:ProgramFiles\Tailscale\tailscale.exe"
+ 
+-      - name: Upload Auth URL (First Upload)
+-        uses: actions/upload-artifact@v4
+-        with:
+-          name: result
+-          path: info.txt
+-          overwrite: true
++          $hostname = "gh-rdp-${{ github.run_id }}"
++          & $ts up --authkey="$env:TAILSCALE_AUTHKEY" --hostname="$hostname" --accept-routes --accept-dns=false --ssh=false
+ 
+-      - name: Wait for Approval
+-        shell: pwsh
+-        run: |
+-          $ErrorActionPreference = "Continue"
+-          $ts = "$env:ProgramFiles/Tailscale/tailscale.exe"
+-          
+-          # Load saved auth URL if exists
+-          $authUrl = ""
+-          if (Test-Path authurl.txt) {
+-            $authUrl = (Get-Content authurl.txt -Raw -ErrorAction SilentlyContinue)
+-            if ($authUrl) { $authUrl = $authUrl.Trim() }
+-            Write-Host "Loaded auth URL: $authUrl"
+-          }
+-          
+-          Write-Host "Waiting for Tailscale approval (up to 10 minutes)..."
+-          
+-          for ($i = 0; $i -lt 120; $i++) {
+-            # Check if connected
+-            try {
+-              $ip = & $ts ip -4 2>$null
+-              if ($ip -match '^100\.') {
+-                Write-Host "======================================"
+-                Write-Host "APPROVED! Final IP: $($ip.Trim())"
+-                Write-Host "======================================"
+-                "$($ip.Trim()):3389|Vps@cJpkANXH@7" | Out-File info.txt -Encoding utf8 -NoNewline
+-                exit 0
+-              }
+-            } catch {}
+-            
+-            # If no auth URL yet, try to find it
+-            if (-not $authUrl) {
+-              try {
+-                $status = & $ts status 2>&1 | Out-String
+-                if ($status -match 'https://login\.tailscale\.com/a/[a-zA-Z0-9]+') {
+-                  $authUrl = $Matches[0]
+-                  Write-Host "Found auth URL: $authUrl"
+-                  $authUrl | Out-File authurl.txt -Encoding utf8 -NoNewline
+-                }
+-              } catch {}
+-            }
+-            
+-            # Keep auth URL in info.txt
+-            if ($authUrl) {
+-              "WAITING_AUTH|$authUrl" | Out-File info.txt -Encoding utf8 -NoNewline
+-            } else {
+-              "PENDING|Dang cho Tailscale..." | Out-File info.txt -Encoding utf8 -NoNewline
+-            }
+-            
+-            Start-Sleep 5
++          Start-Sleep -Seconds 3
++          $ip = (& $ts ip -4 | Select-Object -First 1).Trim()
++
++          if (-not $ip) {
++            throw "Không lấy được IP Tailscale"
+           }
+-          
+-          Write-Host "Timeout waiting for approval after 10 minutes"
+-          "TIMEOUT|Chua approve sau 10 phut" | Out-File info.txt -Encoding utf8 -NoNewline
+-          # QUAN TRONG: Van exit 0 de step tiep theo chay
+-          exit 0
+-
+-      - name: Upload Final Result
+-        if: always()
++
++          "RDP_HOST=$ip" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
++          "${ip}:3389|$($env:RDP_USERNAME)" | Out-File info.txt -Encoding utf8 -NoNewline
++          Write-Host "Tailscale IP: $ip"
++
++      - name: Upload connection info artifact
+         uses: actions/upload-artifact@v4
+         with:
+           name: result
+           path: info.txt
+           overwrite: true
+ 
+-      - name: Keep Alive 6 Hours
+-        if: always()
++      - name: Keep alive
+         shell: pwsh
+         run: |
+-          $ts = "$env:ProgramFiles/Tailscale/tailscale.exe"
+-          
++          $minutes = [int]$env:DURATION_MINUTES
++          $ts = "$env:ProgramFiles\Tailscale\tailscale.exe"
++
+           Write-Host "======================================"
+-          Write-Host "RDP Tailscale - Keep Alive 6 Hours"
+-          Write-Host "User: runneradmin"
+-          Write-Host "Pass: Vps@cJpkANXH@7"
++          Write-Host "Windows RDP VPS is ready"
++          Write-Host "Host: $env:RDP_HOST"
++          Write-Host "Port: 3389"
++          Write-Host "User: $env:RDP_USERNAME"
++          Write-Host "Duration: $minutes phút"
+           Write-Host "======================================"
+-          
+-          for ($m = 1; $m -le 360; $m++) {
+-            if ($m % 30 -eq 0) {
++
++          for ($m = 1; $m -le $minutes; $m++) {
++            if ($m % 15 -eq 0) {
+               try {
+-                $ip = & $ts ip -4 2>$null
+-                if ($ip) {
+-                  Write-Host "[$m/360] Alive - IP: $($ip.Trim())"
+-                } else {
+-                  Write-Host "[$m/360] Alive - Tailscale not connected"
+-                }
++                $ip = (& $ts ip -4 | Select-Object -First 1).Trim()
++                Write-Host "[$m/$minutes] Alive - $ip"
+               } catch {
+-                Write-Host "[$m/360] Alive - Tailscale check error"
++                Write-Host "[$m/$minutes] Alive - Không kiểm tra được Tailscale"
+               }
+             }
+-            Start-Sleep 60
++            Start-Sleep -Seconds 60
+           }
+-          Write-Host "Session ended after 6 hours"
+ 
+EOF
+)
